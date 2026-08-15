@@ -16,6 +16,14 @@ speech edge, which relies on browser-level echo cancellation
 (`getUserMedia({ echoCancellation: true })`). Loud TTS playback may leak
 into the mic on some platforms; there is no JS-level AEC.
 
+## Demo
+
+![dsh-voice demo](docs/demo.gif)
+
+The loop: a user prompt streams back as spoken audio sentence-by-sentence,
+then the user's voice interrupts playback and stops the running turn
+mid-reply (true barge-in). The mic keeps recording the new speech.
+
 ## How it works
 
 ```
