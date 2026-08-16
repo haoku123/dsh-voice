@@ -115,7 +115,16 @@ export function createAsrEngine(config: AsrConfig, basePath: string): AsrEngine 
       // cross-origin modelHost: hf-mirror.com and huggingface.co do not
       // reliably send CORS headers on every response path.
       mod.env.remoteHost = `${location.origin}${basePath.replace(/\/+$/, '')}/hf`
-      transcriber = await mod.pipeline('automatic-speech-recognition', config.model, { dtype: 'q8' })
+      // transformers.js 4.2.0 has an optimizer bug that fails q8 decoder
+      // session creation ("TransposeDQWeightsForMatMulNBits Missing required
+      // scale"); fixed upstream in v4.3.0. Until then use the combination
+      // verified in huggingface/transformers.js#1707: quantized encoder +
+      // q4 decoder on WebGPU. Tracked upstream:
+      // https://github.com/huggingface/transformers.js/issues/1707
+      transcriber = await mod.pipeline('automatic-speech-recognition', config.model, {
+        dtype: { encoder_model: 'q8', decoder_model_merged: 'q4' },
+        device: 'webgpu',
+      })
       return transcriber
     } catch (e) {
       setState('idle')
