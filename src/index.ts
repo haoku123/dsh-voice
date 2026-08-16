@@ -44,7 +44,7 @@ export const Config: z<Config> = z.object({
       modelHost: z.string().default('https://huggingface.co'),
       cdnBase: z
         .string()
-        .default('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0'),
+        .default('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm'),
       language: z.string().default('zh'),
       autoSend: z.boolean().default(false),
       mode: z.union([z.const('toggle'), z.const('hold')]).default('toggle'),

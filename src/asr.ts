@@ -11,7 +11,14 @@ export interface AsrConfig {
   model: string
   /** Model host, e.g. https://huggingface.co or https://hf-mirror.com (CN). */
   modelHost: string
-  /** CDN base for the transformers.js ESM bundle. */
+  /**
+   * Full URL of a self-contained transformers.js ESM bundle.
+   *
+   * Use jsdelivr's `+esm` build: it bundles the bare-specifier imports
+   * (`onnxruntime-web/webgpu`, `onnxruntime-common`) that plain
+   * `dist/transformers.web.js` leaves unresolved, which otherwise fails
+   * with "Failed to resolve module specifier" in browsers.
+   */
   cdnBase: string
   /** Whisper language hint: 'zh', 'en', or 'auto'. */
   language: string
@@ -98,7 +105,7 @@ export function createAsrEngine(config: AsrConfig): AsrEngine {
     setState('loading-model')
     try {
       const mod = (await import(
-        /* webpackIgnore: true */ `${config.cdnBase}/dist/transformers.web.js`
+        /* webpackIgnore: true */ config.cdnBase
       )) as WhisperBundle
       mod.env.remoteHost = config.modelHost
       transcriber = await mod.pipeline('automatic-speech-recognition', config.model, { dtype: 'q8' })

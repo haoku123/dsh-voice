@@ -74,7 +74,7 @@ Config (bundle patch row):
     asr:
       model: onnx-community/whisper-base   # or whisper-tiny / whisper-small
       modelHost: https://huggingface.co    # or https://hf-mirror.com
-      cdnBase: https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0
+      cdnBase: https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm
       language: zh                         # zh | en | auto
       autoSend: false
       mode: toggle                         # toggle | hold
