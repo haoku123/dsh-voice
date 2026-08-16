@@ -35,6 +35,7 @@ await build({
     '@deepseek-ai/dsh-host-webserver',
     '@deepseek-ai/dsh-llm',
     'msedge-tts',
+    'sherpa-onnx',
     'node:*',
   ],
   logLevel: 'info',

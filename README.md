@@ -4,11 +4,12 @@ Full-duplex voice mode for DeepSeek Harness: streamed ASR → LLM → TTS with b
 
 ## Status
 
-**v0.4.0 — barge-in complete. The full voice loop is wired end to end.**
+**v0.5.0 — SenseVoice (sherpa-onnx) host-side ASR.**
 
 Speak into the composer mic: the assistant silences itself (playback stops,
 host synthesis queue drops), the running turn is cancelled (the stop-button
-route), and your speech is transcribed locally and submitted. The reply
+route), and your speech is transcribed by the host (SenseVoice, CN-native
+simplified-Chinese ASR with punctuation + ITN) and submitted. The reply
 streams back as spoken audio with live captions.
 
 Known limitation: barge-in detection is triggered by the mic's leading
@@ -27,8 +28,8 @@ mid-reply (true barge-in). The mic keeps recording the new speech.
 ## How it works
 
 ```
-input:  mic ──RMS endpoint detection──▶ whisper (browser, q8 onnx)
-                                           │ text
+input:  mic ──RMS endpoint detection──▶ POST /asr (raw f32 PCM)
+                                           │ text (SenseVoice)
                                            ▼
         composer draft ──submit──▶ model stream ──llm/stream tap──▶ SentenceSegmenter
                                                                      │
@@ -41,12 +42,18 @@ barge-in: speech edge ──▶ engine.skip() + POST /cancel (epoch bump)
 
 - The `llm/stream` tap is **lossless**: every chunk is yielded unchanged, the
   segmenter only observes. The model stream is never blocked by synthesis.
-- ASR runs **fully locally** in the browser: transformers.js loads from a
-  CDN via a native dynamic import (kept intact by esbuild
-  `supported: { 'dynamic-import': true }`), the whisper model streams from
-  the configured model host with browser-cache enabled. No API key, no
-  server-side speech processing.
-- RMS endpoint detection: 16kHz getUserMedia, 1.3s trailing-silence cutoff,
+- ASR runs **host-side** with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+  (Apache-2.0) running **SenseVoice** — the CN-native speech model that
+  outperforms whisper on Chinese: native simplified output, punctuation,
+  inverse text normalization (ITN) and 50+ language auto-detection. The
+  browser only records and posts raw little-endian f32 PCM.
+- Model files stream through a **cache-through proxy** at
+  `/dsh-voice-api/hf` and are mirrored to disk
+  (`~/.cache/dsh-voice/models/`, configurable via `cacheDir`), so every
+  browser/recognizer load after the first is served from local disk.
+  Downloads resume from partial `.part` files when interrupted. Use
+  `npm run prefetch` to warm the cache once.
+- RMS endpoint detection: 16kHz getUserMedia, 2s trailing-silence cutoff,
   max 30s segment, pre/post padding. Zero dependencies.
 - Barge-in is three-layered: local playback queue cleared, host `TtsQueue`
   epoch bumped (queued AND in-flight synthesis dropped), and the running
@@ -60,8 +67,10 @@ barge-in: speech edge ──▶ engine.skip() + POST /cancel (epoch bump)
 | Route | Purpose |
 |-------|---------|
 | `GET /dsh-voice-api/stream` | SSE; `event: audio` frames `{sessionId, seq, text, audio(base64 MP3)}` |
+| `POST /dsh-voice-api/asr` | raw little-endian f32 PCM body → `{text}` via SenseVoice |
 | `POST /dsh-voice-api/cancel` | `{sessionId}` drops queued + in-flight synthesis (epoch bump) |
 | `GET /dsh-voice-api/config` | ASR runtime config `{asr: {...}}` for the mic button |
+| `GET /dsh-voice-api/hf/*` | cache-through HF model proxy (mirrors to `cacheDir`) |
 | `GET /dsh-voice-api/*` | ping: `{ok, name, enabled}` |
 
 Config (bundle patch row):
@@ -71,13 +80,21 @@ Config (bundle patch row):
   name: '@haoku123/dsh-voice'
   config:
     voice: zh-CN-XiaoxiaoNeural
+    cacheDir: ~/.cache/dsh-voice/models   # optional, on-disk model cache
     asr:
-      model: onnx-community/whisper-base   # or whisper-tiny / whisper-small
-      modelHost: https://huggingface.co    # or https://hf-mirror.com
-      cdnBase: https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm
-      language: zh                         # zh | en | auto
+      model: csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+      modelHost: https://huggingface.co   # or https://hf-mirror.com
+      language: auto                      # auto | zh | en | ja | ko | yue
+      useItn: true                        # inverse text normalization
       autoSend: false
-      mode: toggle                         # toggle | hold
+      mode: toggle                        # toggle | hold
+```
+
+Model files are fetched through the proxy on first use; warm the cache once
+with the dsh host running:
+
+```sh
+npm run prefetch          # uses http://127.0.0.1:3080 by default
 ```
 
 ## Install

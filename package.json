@@ -1,7 +1,7 @@
 {
   "name": "@haoku123/dsh-voice",
   "description": "Full-duplex voice mode for DeepSeek Harness: streamed ASR -> LLM -> TTS with barge-in",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/segmenter.test.mjs"
+    "test": "node test/segmenter.test.mjs",
+    "prefetch": "node scripts/prefetch.mjs"
   },
   "dsh": {
     "bundle": {
@@ -32,7 +33,8 @@
     }
   },
   "dependencies": {
-    "msedge-tts": "^2.0.7"
+    "msedge-tts": "^2.0.7",
+    "sherpa-onnx": "^1.13.5"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

@@ -1,33 +1,16 @@
 /**
  * dsh-voice ASR engine (browser half): RMS-based endpoint detection on
- * getUserMedia audio + local whisper transcription loaded on demand from a
- * CDN ESM bundle (native dynamic import, no esbuild rewriting).
+ * getUserMedia audio. Segmented f32 PCM is POSTed to the host, which runs
+ * SenseVoice (sherpa-onnx) and returns the transcript.
  */
 
 export type AsrState = 'idle' | 'recording' | 'speech' | 'transcribing' | 'loading-model'
 
 export interface AsrConfig {
-  /** Whisper model id (onnx-community family, quantized). */
-  model: string
-  /**
-   * Upstream model host used by the dsh host proxy (browsers fetch models
-   * same-origin through `${basePath}/hf`). E.g. https://huggingface.co or
-   * https://hf-mirror.com (CN).
-   */
-  modelHost: string
-  /**
-   * Full URL of a self-contained transformers.js ESM bundle.
-   *
-   * Use jsdelivr's `+esm` build: it bundles the bare-specifier imports
-   * (`onnxruntime-web/webgpu`, `onnxruntime-common`) that plain
-   * `dist/transformers.web.js` leaves unresolved, which otherwise fails
-   * with "Failed to resolve module specifier" in browsers.
-   */
-  cdnBase: string
-  /** Whisper language hint: 'zh', 'en', or 'auto'. */
-  language: string
   /** Interaction mode: toggle (tap to start/stop, auto-segments) or hold. */
   mode: 'toggle' | 'hold'
+  /** Auto-submit the draft after a transcript lands. */
+  autoSend: boolean
 }
 
 export interface AsrEngine {
@@ -42,18 +25,9 @@ export interface AsrEngine {
   readonly setTranscriptHandler: (fn: (text: string) => void) => void
 }
 
-interface WhisperBundle {
-  pipeline: (task: string, model: string, opts?: Record<string, unknown>) => Promise<Transcriber>
-  env: { remoteHost: string }
-}
-
-interface Transcriber {
-  (audio: Float32Array, opts?: Record<string, unknown>): Promise<{ text: string }>
-}
-
 const SAMPLE_RATE = 16000
 const ENERGY_THRESHOLD = 0.015
-const SILENCE_TIMEOUT_MS = 1300
+const SILENCE_TIMEOUT_MS = 2000
 const MAX_SEGMENT_MS = 30000
 const PRE_PAD_MS = 250
 const POST_PAD_MS = 350
@@ -66,7 +40,9 @@ export function createAsrEngine(config: AsrConfig, basePath: string): AsrEngine 
   const stateListeners = new Set<(s: AsrState) => void>()
   const transcriptListeners = new Set<(text: string) => void>()
   const speechStartListeners = new Set<() => void>()
-  let transcriber: Transcriber | null = null
+  // SenseVoice runs host-side (sherpa-onnx); the browser just POSTs raw
+  // f32 PCM and reads the transcript back.
+  const asrUrl = `${location.origin}${basePath.replace(/\/+$/, '')}/asr`
   let transcribing = false
 
   // --- recorder fields ---
@@ -104,43 +80,22 @@ export function createAsrEngine(config: AsrConfig, basePath: string): AsrEngine 
     }
   }
 
-  const loadWhisper = async (): Promise<Transcriber> => {
-    if (transcriber) return transcriber
-    setState('loading-model')
-    try {
-      const mod = (await import(
-        /* webpackIgnore: true */ config.cdnBase
-      )) as WhisperBundle
-      // Fetch models through the host proxy (same-origin) instead of
-      // cross-origin modelHost: hf-mirror.com and huggingface.co do not
-      // reliably send CORS headers on every response path.
-      mod.env.remoteHost = `${location.origin}${basePath.replace(/\/+$/, '')}/hf`
-      // transformers.js 4.2.0 has an optimizer bug that fails q8 decoder
-      // session creation ("TransposeDQWeightsForMatMulNBits Missing required
-      // scale"); fixed upstream in v4.3.0. Until then use the combination
-      // verified in huggingface/transformers.js#1707: quantized encoder +
-      // q4 decoder on WebGPU. Tracked upstream:
-      // https://github.com/huggingface/transformers.js/issues/1707
-      transcriber = await mod.pipeline('automatic-speech-recognition', config.model, {
-        dtype: { encoder_model: 'q8', decoder_model_merged: 'q4' },
-        device: 'webgpu',
-      })
-      return transcriber
-    } catch (e) {
-      setState('idle')
-      throw new Error(`whisper load failed: ${String(e)}`)
-    }
-  }
-
   const transcribeSegment = async (audio: Float32Array): Promise<void> => {
     if (transcribing) return
     transcribing = true
     setState('transcribing')
     try {
-      const t = await loadWhisper()
-      const lang = config.language === 'auto' ? undefined : config.language
-      const out = await t(audio, lang ? { language: lang, task: 'transcribe' } : { task: 'transcribe' })
-      emitTranscript(out.text)
+      // Send the exact f32 buffer (little-endian) as binary; SenseVoice on
+      // the host decodes it and returns { text }.
+      const body = audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength)
+      const res = await fetch(asrUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body,
+      })
+      if (!res.ok) throw new Error(`asr http ${res.status}`)
+      const out = (await res.json()) as { text?: string }
+      if (out.text) emitTranscript(out.text)
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn(`[dsh-voice] transcription failed: ${String(e)}`)
