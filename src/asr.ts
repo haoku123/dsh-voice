@@ -46,7 +46,9 @@ const SILENCE_TIMEOUT_MS = 1300
 const MAX_SEGMENT_MS = 30000
 const PRE_PAD_MS = 250
 const POST_PAD_MS = 350
-const BUFFER_MS = 100 // ScriptProcessor buffer = 1600 samples
+// ScriptProcessor buffer size must be 0 or a power of two in [256, 16384].
+// 1024 samples @ 16kHz = 64ms per onaudioprocess tick.
+const BUFFER_SIZE = 1024
 
 export function createAsrEngine(config: AsrConfig): AsrEngine {
   let state: AsrState = 'idle'
@@ -207,7 +209,7 @@ export function createAsrEngine(config: AsrConfig): AsrEngine {
     })
     audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE })
     const source = audioCtx.createMediaStreamSource(stream)
-    processor = audioCtx.createScriptProcessor(BUFFER_MS * (SAMPLE_RATE / 1000), 1, 1)
+    processor = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1)
     processor.onaudioprocess = (e) => {
       const input = e.inputBuffer.getChannelData(0)
       handleAudio(new Float32Array(input))
