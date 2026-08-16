@@ -9,7 +9,11 @@ export type AsrState = 'idle' | 'recording' | 'speech' | 'transcribing' | 'loadi
 export interface AsrConfig {
   /** Whisper model id (onnx-community family, quantized). */
   model: string
-  /** Model host, e.g. https://huggingface.co or https://hf-mirror.com (CN). */
+  /**
+   * Upstream model host used by the dsh host proxy (browsers fetch models
+   * same-origin through `${basePath}/hf`). E.g. https://huggingface.co or
+   * https://hf-mirror.com (CN).
+   */
   modelHost: string
   /**
    * Full URL of a self-contained transformers.js ESM bundle.
@@ -57,7 +61,7 @@ const POST_PAD_MS = 350
 // 1024 samples @ 16kHz = 64ms per onaudioprocess tick.
 const BUFFER_SIZE = 1024
 
-export function createAsrEngine(config: AsrConfig): AsrEngine {
+export function createAsrEngine(config: AsrConfig, basePath: string): AsrEngine {
   let state: AsrState = 'idle'
   const stateListeners = new Set<(s: AsrState) => void>()
   const transcriptListeners = new Set<(text: string) => void>()
@@ -107,7 +111,10 @@ export function createAsrEngine(config: AsrConfig): AsrEngine {
       const mod = (await import(
         /* webpackIgnore: true */ config.cdnBase
       )) as WhisperBundle
-      mod.env.remoteHost = config.modelHost
+      // Fetch models through the host proxy (same-origin) instead of
+      // cross-origin modelHost: hf-mirror.com and huggingface.co do not
+      // reliably send CORS headers on every response path.
+      mod.env.remoteHost = `${location.origin}${basePath.replace(/\/+$/, '')}/hf`
       transcriber = await mod.pipeline('automatic-speech-recognition', config.model, { dtype: 'q8' })
       return transcriber
     } catch (e) {

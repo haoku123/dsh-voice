@@ -31,6 +31,7 @@ export interface AudioState {
 
 interface HostConfig {
   asr: AsrConfig
+  basePath: string
 }
 
 export const inject = ['slots', 'sessions']
@@ -301,7 +302,7 @@ function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTur
       .then((c) => {
         if (cancelled) return
         configRef.current = c.asr
-        const engine = createAsrEngine(c.asr)
+        const engine = createAsrEngine(c.asr, c.basePath)
         engine.onState(setAsrState)
         // Barge-in: the leading edge of user speech silences the assistant
         // (always), and stops the running turn when one exists (the stop

@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 // Type-only: chunk/options shapes for the llm/stream waterfall tap.
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
 
 import { SentenceSegmenter } from './segmenter.ts'
 import { TtsQueue, type VoiceFrame } from './tts-queue.ts'
@@ -138,7 +139,45 @@ export function apply(ctx: Context, config: Config): void {
       handler: (_req, res) => {
         res.statusCode = 200
         res.setHeader('content-type', 'application/json')
-        res.end(JSON.stringify({ asr: config.asr }))
+        res.end(JSON.stringify({ asr: config.asr, basePath: config.basePath }))
+      },
+    }),
+  )
+
+  // --- HuggingFace model proxy. ---
+  // Browsers fetch whisper models cross-origin, but hf-mirror.com (and
+  // huggingface.co on some routes) do not send CORS headers on every
+  // response path (HTTP/3 edge nodes, 307 redirect targets). Proxying
+  // through the host keeps every model download same-origin, which also
+  // makes the CN mirror work out of the box.
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'prefix',
+      path: `${base}/hf`,
+      handler: (req, res) => {
+        const suffix = req.url!.slice(`${base}/hf`.length)
+        const upstreamUrl = config.asr.modelHost.replace(/\/+$/, '') + suffix
+        const headers: Record<string, string> = {}
+        if (req.headers.range) headers.range = req.headers.range
+        void fetch(upstreamUrl, { headers })
+          .then((up) => {
+            const pass = (name: string): void => {
+              const value = up.headers.get(name)
+              if (value) res.setHeader(name, value)
+            }
+            res.statusCode = up.status
+            pass('content-type')
+            pass('content-length')
+            pass('content-range')
+            pass('accept-ranges')
+            pass('etag')
+            if (up.body) Readable.fromWeb(up.body as never).pipe(res)
+            else res.end()
+          })
+          .catch((error) => {
+            res.statusCode = 502
+            res.end(`upstream fetch failed: ${String(error)}`)
+          })
       },
     }),
   )
