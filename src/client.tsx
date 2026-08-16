@@ -179,7 +179,10 @@ function VoicePanel(props: VoicePanelActions): React.ReactElement {
     return subscribe(setState)
   }, [connect, subscribe])
 
-  const dot = state.connected && state.playing ? '#1a7f37' : state.connected ? '#57606a' : '#b42318'
+  useStyle(UI_CSS)
+
+  const playing = state.connected && state.playing
+  const dot = playing ? '#2ea043' : state.connected ? '#8b949e' : '#f85149'
 
   return (
     <div
@@ -190,41 +193,67 @@ function VoicePanel(props: VoicePanelActions): React.ReactElement {
         zIndex: 9999,
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '6px 12px',
+        gap: 10,
+        padding: '8px 14px',
         borderRadius: 999,
         fontSize: 12,
         fontFamily: 'system-ui, sans-serif',
         pointerEvents: 'auto',
-        background: 'rgba(28, 30, 34, 0.92)',
-        color: '#fff',
-        maxWidth: 420,
+        background: 'rgba(22, 24, 28, 0.85)',
+        backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        boxShadow: '0 8px 28px rgba(0, 0, 0, 0.4)',
+        color: '#e6e8eb',
+        maxWidth: 480,
+        animation: 'dshv-fadein 0.25s ease',
       }}
     >
+      {playing ? (
+        <EqualizerBars color="#2ea043" height={13} />
+      ) : (
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: dot,
+            flexShrink: 0,
+            transition: 'background 0.2s ease',
+            ...(state.connected
+              ? {}
+              : ({
+                  '--dshv-pulse': 'rgba(248, 81, 73, 0.45)',
+                  animation: 'dshv-pulse 1.6s ease-out infinite',
+                } as Record<string, unknown>)),
+          }}
+        />
+      )}
       <span
+        key={state.caption ?? 'idle'}
         style={{
-          width: 8,
-          height: 8,
-          borderRadius: 999,
-          background: dot,
-          flexShrink: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          animation: 'dshv-fadein 0.2s ease',
         }}
-      />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      >
         {state.caption ?? (state.connected ? 'voice ready' : 'voice offline')}
       </span>
       {state.playing ? (
         <button
+          className="dshv-skip"
           onClick={skip}
           style={{
             border: 'none',
-            background: 'rgba(255,255,255,0.16)',
+            background: 'rgba(255, 255, 255, 0.14)',
             color: '#fff',
             borderRadius: 999,
-            padding: '2px 10px',
+            padding: '3px 12px',
             fontSize: 11,
             cursor: 'pointer',
             flexShrink: 0,
+            transition: 'background 0.15s ease',
           }}
         >
           skip
@@ -257,15 +286,62 @@ const STATE_LABEL: Record<AsrState, string> = {
   recording: 'voice: listening…',
   speech: 'voice: speaking…',
   transcribing: 'voice: transcribing…',
-  'loading-model': 'voice: loading whisper…',
+  'loading-model': 'voice: loading model…',
 }
 
 const STATE_COLOR: Record<AsrState, string> = {
-  idle: '#57606a',
-  recording: '#b42318',
-  speech: '#1a7f37',
-  transcribing: '#0969da',
-  'loading-model': '#8250df',
+  idle: '#8b949e',
+  recording: '#f85149',
+  speech: '#2ea043',
+  transcribing: '#58a6ff',
+  'loading-model': '#bc8cff',
+}
+
+// Shared keyframes + hover styles (GitHub-dark palette). Injected once.
+const UI_CSS = `
+@keyframes dshv-fadein { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+@keyframes dshv-eq { 0%, 100% { transform: scaleY(0.35) } 50% { transform: scaleY(1) } }
+@keyframes dshv-spin { to { transform: rotate(360deg) } }
+@keyframes dshv-pulse {
+  0% { box-shadow: 0 0 0 0 var(--dshv-pulse, rgba(248, 81, 73, 0.45)) }
+  70% { box-shadow: 0 0 0 6px transparent }
+  100% { box-shadow: 0 0 0 0 transparent }
+}
+.dshv-skip:hover { background: rgba(255, 255, 255, 0.26) !important }
+.dshv-mic:hover { background: rgba(139, 148, 158, 0.14) !important }
+`
+
+let styleInjected = false
+
+function useStyle(css: string): void {
+  useEffect(() => {
+    if (styleInjected) return
+    styleInjected = true
+    const el = document.createElement('style')
+    el.textContent = css
+    document.head.appendChild(el)
+  }, [css])
+}
+
+/** Three bouncing bars, the classic "now speaking" visual. */
+function EqualizerBars({ color, height = 12 }: { color: string; height?: number }): React.ReactElement {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 2, height, flexShrink: 0 }}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            width: 3,
+            height: '100%',
+            borderRadius: 99,
+            background: color,
+            transformOrigin: 'bottom',
+            animation: `dshv-eq 0.85s ease-in-out ${i * 0.18}s infinite`,
+          }}
+        />
+      ))}
+    </span>
+  )
 }
 
 function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTurn }: MicProps): React.ReactElement {
@@ -371,8 +447,49 @@ function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTur
         }
       : {}
 
+  useStyle(UI_CSS)
+
+  const busy = asrState === 'transcribing' || asrState === 'loading-model'
+  const indicator = busy ? (
+    // spinner ring while the host is recognizing / loading the model
+    <span
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: 999,
+        border: '2px solid rgba(188, 140, 255, 0.25)',
+        borderTopColor: STATE_COLOR[asrState],
+        animation: 'dshv-spin 0.7s linear infinite',
+        flexShrink: 0,
+      }}
+    />
+  ) : asrState === 'speech' ? (
+    <EqualizerBars color="#2ea043" height={11} />
+  ) : (
+    <span
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: 999,
+        background: error ? '#f85149' : STATE_COLOR[asrState],
+        display: 'inline-block',
+        flexShrink: 0,
+        transition: 'background 0.2s ease',
+        ...(asrState === 'recording' && !error
+          ? ({
+              '--dshv-pulse': 'rgba(248, 81, 73, 0.45)',
+              animation: 'dshv-pulse 1.2s ease-out infinite',
+            } as Record<string, unknown>)
+          : {}),
+      }}
+    />
+  )
+
+  const label = asrState === 'idle' ? 'mic' : error ?? STATE_LABEL[asrState].replace('voice: ', '')
+
   return (
     <button
+      className="dshv-mic"
       onClick={toggle}
       {...holdProps}
       title={error ?? STATE_LABEL[asrState]}
@@ -380,26 +497,19 @@ function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTur
         border: 'none',
         background: 'transparent',
         cursor: 'pointer',
-        padding: 4,
+        padding: '4px 8px',
+        borderRadius: 8,
         display: 'flex',
         alignItems: 'center',
         gap: 6,
         fontSize: 11,
         fontFamily: 'system-ui, sans-serif',
-        color: error ? '#b42318' : '#57606a',
+        color: error ? '#f85149' : '#8b949e',
+        transition: 'background 0.15s ease, color 0.2s ease',
       }}
     >
-      <span
-        style={{
-          width: 10,
-          height: 10,
-          borderRadius: 999,
-          background: error ? '#b42318' : STATE_COLOR[asrState],
-          display: 'inline-block',
-          flexShrink: 0,
-        }}
-      />
-      {asrState === 'idle' ? 'mic' : error ?? STATE_LABEL[asrState].replace('voice: ', '')}
+      {indicator}
+      {label}
     </button>
   )
 }
