@@ -166,7 +166,7 @@ function createAudioEngine(): VoicePanelActions {
   return { connect, skip, subscribe }
 }
 
-function VoicePanel(props: VoicePanelActions): React.ReactElement {
+export function VoicePanel(props: VoicePanelActions): React.ReactElement {
   const { connect, skip, subscribe } = props
   const [state, setState] = useState<AudioState>({
     connected: false,
@@ -344,7 +344,7 @@ function EqualizerBars({ color, height = 12 }: { color: string; height?: number 
   )
 }
 
-function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTurn }: MicProps): React.ReactElement {
+export function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTurn }: MicProps): React.ReactElement {
   const [asrState, setAsrState] = useState<AsrState>('idle')
   const [error, setError] = useState<string | null>(null)
   const engineRef = useRef<AsrEngine | null>(null)
@@ -485,7 +485,14 @@ function MicButton({ useSession, useInput, inputActions, skipPlayback, cancelTur
     />
   )
 
-  const label = asrState === 'idle' ? 'mic' : error ?? STATE_LABEL[asrState].replace('voice: ', '')
+  // An error must win over the idle label, otherwise a failed host config
+  // fetch silently renders as a normal "mic" button (the full message stays
+  // in the title attribute — the label has to stay composer-sized).
+  const label = error
+    ? 'voice error'
+    : asrState === 'idle'
+      ? 'mic'
+      : STATE_LABEL[asrState].replace('voice: ', '')
 
   return (
     <button

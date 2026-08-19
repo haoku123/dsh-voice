@@ -29,15 +29,17 @@ const ctx = {
 }
 
 // --- drive apply ---
+const SENSE_VOICE_REPO = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17'
 const config = {
   basePath: '/dsh-voice-api',
   voice: 'zh-CN-XiaoxiaoNeural',
   enabled: true,
+  cacheDir: '/tmp/dsh-voice-test-cache',
   asr: {
-    model: 'onnx-community/whisper-base',
+    model: SENSE_VOICE_REPO,
     modelHost: 'https://huggingface.co',
-    cdnBase: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
-    language: 'zh',
+    language: 'auto',
+    useItn: true,
     autoSend: false,
     mode: 'toggle',
   },
@@ -50,7 +52,33 @@ console.log('routes:', kinds.join(', '))
 if (!routes.some((r) => r.path === '/dsh-voice-api/stream')) throw new Error('SSE route missing')
 if (!routes.some((r) => r.path === '/dsh-voice-api/cancel')) throw new Error('cancel route missing')
 if (!routes.some((r) => r.path === '/dsh-voice-api/config')) throw new Error('config route missing')
+// SenseVoice migration: host-side recognition + cache-through model proxy
+if (!routes.some((r) => r.path === '/dsh-voice-api/asr')) throw new Error('asr route missing')
+if (!routes.some((r) => r.path === '/dsh-voice-api/hf' && r.kind === 'prefix')) {
+  throw new Error('hf model proxy route missing')
+}
 console.log('  ok  routes registered')
+
+// /asr rejects malformed PCM payloads (length must be a multiple of 4)
+{
+  const asrRoute = routes.find((r) => r.path === '/dsh-voice-api/asr')
+  const handlers = {}
+  const req = { on(ev, fn) { handlers[ev] = fn; return req } }
+  let status = 0
+  let body = ''
+  asrRoute.handler(req, {
+    set statusCode(v) { status = v },
+    get statusCode() { return status },
+    setHeader() {},
+    end(s) { body = s ?? '' },
+  })
+  handlers.data(Buffer.from([1, 2, 3])) // 3 bytes -> not f32-aligned
+  handlers.end()
+  if (status !== 400 || !body.includes('invalid pcm')) {
+    throw new Error(`expected 400 invalid pcm, got ${status} ${body}`)
+  }
+  console.log('  ok  /asr rejects non-f32-aligned payloads')
+}
 
 // /config returns the ASR runtime config
 {
@@ -65,7 +93,7 @@ console.log('  ok  routes registered')
   }
   cfgRoute.handler({}, cfgRes)
   const parsed = JSON.parse(body)
-  if (!parsed.asr || parsed.asr.model !== 'onnx-community/whisper-base') {
+  if (!parsed.asr || parsed.asr.model !== SENSE_VOICE_REPO) {
     throw new Error('config route missing asr payload: ' + body)
   }
   console.log('  ok  /config returns asr:', parsed.asr.model, '| host:', parsed.asr.modelHost)
