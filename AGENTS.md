@@ -58,6 +58,10 @@ docs/demo.py        # Pillow 手绘 demo.gif（无需真人录制）
 6. **barge-in 三层**：本地播放队列清空 → host `TtsQueue` epoch bump（queued + in-flight 全丢）→ 有 running turn 时 `session.cancel()`。被打断的轮次**不 flush** 尾部半句。
 7. **模型缓存**：`/dsh-voice-api/hf` 是 cache-through 代理，落盘到 `cacheDir`（默认 `~/.cache/dsh-voice/models`），支持 Range 与 `.part` 断点续传。CN 网络把 `modelHost` 改成 `https://hf-mirror.com`。
 8. **测试分工**：host 用 plain-node（`test/*.test.mjs`，import 编译后的 `lib/*.js`，所以**改完要先 build**）；client 用 vitest + jsdom（`src/*.test.tsx`，mock `./asr.ts` 和 `fetch`，不 import 客户端运行时包——闭包 bundle 不可 import）。
+9. **长按说话（press-to-talk）不走 VAD**：`engine.start({ hold: true })` 全程收音，只丢弃 <250ms 的误触。三个入口共用 `beginHold`/`endHold`：mic 按钮、官方发送键（几何命中，因为空草稿时它是 `disabled`，不派发指针事件）、键盘热键（`asr.hotkey`，默认 `Control`）。
+10. **热键必须让真快捷键活着**：键盘阈值 600ms（远大于指针的 260ms），且 hold 期间按下任何其他键就作废本次录音——否则慢速 `Ctrl+C` 会变成一段语音。`Escape` 任何时候取消，`window blur` 也取消（切窗口收不到 keyup，麦克风会一直开着）。
+11. **实时字幕是"预览"，不是结果**：`onPartial` 只在有监听者时才触发 host 重解码（SenseVoice 非流式，每次预览都是整段重跑），>12s 停止预览；松手会 bump `partialEpoch`，迟到的 interim 直接丢弃，**绝不能**混进 `onSegment`/草稿。
+12. **松手后浮层要留着**：`pending` 状态维持浮层 + spinner + 冻结波形，直到 `onSegment` 到达。空识别结果不会触发 `onSegment`，所以必须同时监听 `asrState` 回到 `idle` 的边（否则 spinner 永久转）。
 
 ## 已知坑（历史事故，勿重蹈）
 
@@ -67,6 +71,8 @@ docs/demo.py        # Pillow 手绘 demo.gif（无需真人录制）
 - **exports 缺 `./package.json`** → 插件静默不加载（连报错都没有）。排查：`curl` 首页看 `__DSH_BOOT__` 的 entries 里有没有该插件。
 - **本地开发时 profile 的 `file:` 依赖是拷贝不是软链**：改完 build 后必须 `pnpm remove` + `pnpm add file:...` 重装，并 `md5` 对比两份 `lib/client.js` 一致，再重启 dsh。
 - **错误态要在标签上露出**：`MicButton` 的 label 判断中 `error` 必须优先于 `asrState === 'idle'`，否则 host config 拉取失败时用户只看到普通的 `mic`（曾是真 bug，被组件测试抓出）。
+- **window 级监听不能捕获渲染闭包**：`MicButton` 的指针/键盘监听只在挂载时装一次，所有回调必须走 `beginHoldRef`/`endHoldRef`/`findSendKeyRef` 转发，否则拿到的是首帧的陈旧闭包（曾导致"按了没反应"）。
+- **VAD 门控曾静默吞掉长按录音**：RMS < 0.015 的整段录音在 tap 模式下会被丢弃，长按时表现为"按了说话没用"。修法是 hold 模式全程收音；另外时长判断要在**补尾垫之前**测，否则 350ms 静音垫会让 64ms 的误触通过下限。
 - **npm publish**：账号开 2FA，`.npmrc` 需放 granular + bypass 2FA 的 token；`NODE_AUTH_TOKEN` 在 npm 11+ 已失效。发布后 registry CDN 有几分钟缓存延迟，`npm view` 404 不代表失败，去 npmjs.com 网页确认。
 
 ## 发布流程

@@ -4,13 +4,25 @@ Full-duplex voice mode for DeepSeek Harness: streamed ASR → LLM → TTS with b
 
 ## Status
 
-**v0.5.0 — SenseVoice (sherpa-onnx) host-side ASR.**
+**v0.7.0 — press-to-talk with a live caption.**
 
 Speak into the composer mic: the assistant silences itself (playback stops,
 host synthesis queue drops), the running turn is cancelled (the stop-button
 route), and your speech is transcribed by the host (SenseVoice, CN-native
 simplified-Chinese ASR with punctuation + ITN) and submitted. The reply
 streams back as spoken audio with live captions.
+
+Three ways to dictate:
+
+| gesture | behaviour |
+| --- | --- |
+| tap the mic | continuous dictation; the VAD segments on trailing silence |
+| **hold the send key** (or the mic) | records until release, slide up to discard |
+| **hold `Ctrl`** (configurable `asr.hotkey`) | same, without leaving the keyboard; `Esc` discards |
+
+While a hold is open the overlay shows a **live caption** — the interim
+transcript of what has been said so far — and keeps a spinner up after
+release until the authoritative transcript lands.
 
 Known limitation: barge-in detection is triggered by the mic's leading
 speech edge, which relies on browser-level echo cancellation
@@ -55,6 +67,16 @@ barge-in: speech edge ──▶ engine.skip() + POST /cancel (epoch bump)
   `npm run prefetch` to warm the cache once.
 - RMS endpoint detection: 16kHz getUserMedia, 2s trailing-silence cutoff,
   max 30s segment, pre/post padding. Zero dependencies.
+- **Press-to-talk bypasses the VAD entirely.** Holding the key is already the
+  intent, so every buffer between press and release is kept — gating on
+  loudness there only drops quiet speech, which is indistinguishable from a
+  broken button. Only captures below 250ms are discarded (mis-taps).
+- **Live caption**: while a hold is open the engine re-decodes the buffer
+  every ~900ms and shows the interim text. SenseVoice is not a streaming
+  model, so this is only requested while the overlay is actually on screen,
+  and stops past 12s of audio. Interims are strictly previews: they never
+  reach the composer draft, and an interim that lands after the release is
+  dropped (epoch check) so it can never overwrite the final transcript.
 - Barge-in is three-layered: local playback queue cleared, host `TtsQueue`
   epoch bumped (queued AND in-flight synthesis dropped), and the running
   turn cancelled when `session.running` is true. An aborted turn never
@@ -88,6 +110,7 @@ Config (bundle patch row):
       useItn: true                        # inverse text normalization
       autoSend: false
       mode: toggle                        # toggle | hold
+      hotkey: Control                     # keyboard press-to-talk; '' disables
 ```
 
 Model files are fetched through the proxy on first use; warm the cache once

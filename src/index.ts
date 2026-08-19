@@ -51,6 +51,11 @@ export interface AsrRuntimeConfig {
   useItn: boolean
   autoSend: boolean
   mode: 'toggle' | 'hold'
+  /**
+   * Keyboard press-to-talk key (a `KeyboardEvent.key` value, e.g. 'Control').
+   * Hold it to record, release to send, Escape to discard. Empty disables it.
+   */
+  hotkey: string
 }
 
 export interface Config {
@@ -76,6 +81,7 @@ export const Config: z<Config> = z.object({
       useItn: z.boolean().default(true),
       autoSend: z.boolean().default(false),
       mode: z.union([z.const('toggle'), z.const('hold')]).default('toggle'),
+      hotkey: z.string().default('Control'),
     })
     .default({}),
 })

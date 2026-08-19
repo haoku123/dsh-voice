@@ -42,6 +42,7 @@ const config = {
     useItn: true,
     autoSend: false,
     mode: 'toggle',
+    hotkey: 'Control',
   },
 }
 apply(ctx, config)
@@ -96,7 +97,23 @@ console.log('  ok  routes registered')
   if (!parsed.asr || parsed.asr.model !== SENSE_VOICE_REPO) {
     throw new Error('config route missing asr payload: ' + body)
   }
+  // The client reads the keyboard press-to-talk key from here; without it the
+  // hotkey route silently disables itself.
+  if (parsed.asr.hotkey !== 'Control') {
+    throw new Error('config route missing asr.hotkey: ' + body)
+  }
   console.log('  ok  /config returns asr:', parsed.asr.model, '| host:', parsed.asr.modelHost)
+  console.log('  ok  /config exposes the press-to-talk hotkey:', parsed.asr.hotkey)
+}
+
+// Config schema defaults: hotkey must default to Control (the client treats
+// an empty string as "keyboard route off").
+{
+  const defaults = new Config({}).asr
+  if (defaults.hotkey !== 'Control') {
+    throw new Error('asr.hotkey default wrong: ' + JSON.stringify(defaults))
+  }
+  console.log('  ok  asr.hotkey defaults to', defaults.hotkey)
 }
 
 // capture llm/stream listener

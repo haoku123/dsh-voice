@@ -9,7 +9,7 @@ export default defineConfig({
   test: {
     // Host logic is covered by the plain-node suites in test/*.test.mjs
     // (run via `npm test`); vitest owns the jsdom component tests.
-    include: ['src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'node',
   },
 })
