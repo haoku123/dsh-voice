@@ -33,9 +33,12 @@ into the mic on some platforms; there is no JS-level AEC.
 
 ![dsh-voice demo](docs/demo.gif)
 
-The loop: a user prompt streams back as spoken audio sentence-by-sentence,
-then the user's voice interrupts playback and stops the running turn
-mid-reply (true barge-in). The mic keeps recording the new speech.
+The loop: hold the composer's send key (its arrow is covered by a mic glyph),
+watch the live caption fill in while you speak, release into a spinner until
+the final transcript lands, then the reply streams back as spoken audio
+sentence-by-sentence — until the user's voice interrupts playback and stops
+the running turn mid-line (true barge-in). `Ctrl` does the same without
+leaving the keyboard.
 
 ## How it works
 

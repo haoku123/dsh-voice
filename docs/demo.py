@@ -1,9 +1,19 @@
-"""Generate docs/demo.gif: an animated mock of the dsh-voice loop (v0.5).
+"""Generate docs/demo.gif: an animated mock of the dsh-voice loop (v0.7).
 
-Simulates the DSH web UI: a Chinese voice prompt (SenseVoice ASR), a streamed
-assistant reply spoken sentence-by-sentence (Edge TTS), then a barge-in (the
-user speaks, playback stops and the turn is cancelled). Seamless loop: fade in
-from empty, fade out to empty. Runs on plain Python + Pillow, no other deps.
+Simulates the DSH web UI end to end:
+
+1. press-and-hold the composer's send key — its arrow is covered by a mic
+   glyph, a waveform overlay opens, and the *live caption* fills in as the
+   interim transcripts land (deliberately shown as a rough preview that the
+   final pass corrects);
+2. release — the waveform freezes and a spinner holds the overlay until the
+   authoritative transcript arrives;
+3. the transcript is submitted, the reply streams back and is spoken
+   sentence-by-sentence (Edge TTS) with live captions;
+4. barge-in: the user speaks, playback stops and the running turn is
+   cancelled.
+
+Seamless loop: fade in from empty, fade out to empty. Plain Python + Pillow.
 """
 import math
 import os
@@ -11,22 +21,25 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 800, 540
-TOTAL = 96
-DUR = 50  # ms per frame -> 20 fps, ~4.8s loop
+TOTAL = 144
+DUR = 50  # ms per frame -> 20 fps, ~7.2s loop
 
 BG = (16, 18, 22)
 PANEL = (22, 25, 30)
 BUBBLE_USER = (31, 111, 235)
 BUBBLE_AI = (33, 38, 45)
 CODE_BG = (13, 17, 23)
+CARD = (24, 29, 36)
 TEXT = (230, 237, 243)
 SUB = (139, 148, 158)
 GREEN = (63, 185, 80)
 RED = (248, 81, 73)
 PURPLE = (163, 113, 247)
 BLUE = (88, 166, 255)
+SEND = (36, 116, 232)
 KW = (255, 123, 114)
 FN = (210, 168, 255)
+WHITE = (255, 255, 255)
 
 SANS = "/System/Library/Fonts/STHeiti Medium.ttc"
 MONO = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
@@ -37,9 +50,13 @@ f_code = ImageFont.truetype(MONO, 14)
 f_cap = ImageFont.truetype(SANS, 12)
 f_badge = ImageFont.truetype(SANS, 11)
 f_big = ImageFont.truetype(SANS, 44)
-f_mic = ImageFont.truetype(SANS, 10)
+f_live = ImageFont.truetype(SANS, 15)
 
 USER_TEXT = "帮我写一个 TypeScript 快速排序"
+# The interim transcripts are rough on purpose: they are previews, and the
+# final pass is the only authoritative one.
+PARTIAL_1 = "帮我写一个"
+PARTIAL_2 = "帮我写一个 TS 快排"
 SEG1 = "没问题，这是原地快速排序的实现："
 CAPTION = "没问题，这是原地快速排序的实现"
 CODE = [
@@ -50,7 +67,24 @@ CODE = [
     "  quickSort(a, p + 1, hi)",
     "}",
 ]
-BARGE = 60  # frame where the user's voice interrupts
+
+# --- timeline (frames) ---
+T_PRESS = 4        # finger lands on the send key
+T_OVERLAY = 12     # hold threshold cleared: overlay + mic cover appear
+T_P1 = 22          # first interim transcript
+T_P2 = 32          # second interim transcript (corrects the first)
+T_RELEASE = 42     # released: waveform freezes, spinner spins
+T_LAND = 54        # final transcript lands -> submitted
+T_REPLY = 56       # assistant bubble starts streaming
+T_CAP = 62         # voice capsule starts speaking
+T_CODE = 72
+CODE_PER = 6
+BARGE = 100        # the user's voice interrupts, mid-line
+T_BIG = 108
+
+# send key / mic button geometry (siblings in the composer's trailing box)
+SEND_BOX = [694, 484, 722, 512]
+WAVE_BARS = 28
 
 
 def lerp(c1, c2, t):
@@ -59,6 +93,11 @@ def lerp(c1, c2, t):
 
 def alpha(c, t):
     return lerp(BG, c, t)
+
+
+def on(c, bgc, t):
+    """Blend `c` over an arbitrary background (for glyphs inside cards)."""
+    return lerp(bgc, c, t)
 
 
 def rrect(d, box, radius, fill=None, outline=None, width=1):
@@ -119,6 +158,60 @@ def eq_bars(d, x, y, w, h, t, color, phase=0.0):
                     fill=color)
 
 
+def mic_level(t, i):
+    """Pseudo-random mic level for waveform bar `i` at frame `t`."""
+    return 0.5 + 0.5 * math.sin(t * 0.9 - i * 0.55 + math.sin(i * 1.7) * 1.3)
+
+
+def draw_wave(d, cx, cy, t, color, bgc, a, frozen=False):
+    """The rolling waveform: one bar per audio tick, newest on the right."""
+    gap = 6
+    total = WAVE_BARS * gap
+    x0 = cx - total // 2
+    for i in range(WAVE_BARS):
+        lv = mic_level(T_RELEASE if frozen else t, i)
+        # bars ramp in from the right as the buffer fills
+        lv *= 0.25 + 0.75 * min(1.0, max(0.0, (t - T_OVERLAY - i * 0.25) / 6.0))
+        bh = max(3, int(3 + lv * 34))
+        fade = a * (0.28 if frozen else 0.45 + lv * 0.55)
+        x = x0 + i * gap
+        rrect(d, [x, cy - bh // 2, x + 3, cy + bh // 2], 2, on(color, bgc, fade))
+
+
+def draw_mic_glyph(d, cx, cy, s, color):
+    """Mic pictogram: capsule head, listening arc, stem and base."""
+    rrect(d, [cx - s * 0.17, cy - s * 0.42, cx + s * 0.17, cy + s * 0.06],
+          int(s * 0.17), color)
+    d.arc([cx - s * 0.33, cy - s * 0.28, cx + s * 0.33, cy + s * 0.3],
+          0, 180, fill=color, width=max(1, int(s * 0.08)))
+    d.line([cx, cy + s * 0.3, cx, cy + s * 0.44], fill=color,
+           width=max(1, int(s * 0.08)))
+    d.line([cx - s * 0.17, cy + s * 0.44, cx + s * 0.17, cy + s * 0.44],
+           fill=color, width=max(1, int(s * 0.08)))
+
+
+def draw_spinner(d, cx, cy, r, t, color):
+    start = (t * 26) % 360
+    d.arc([cx - r, cy - r, cx + r, cy + r], start, start + 260,
+          fill=color, width=2)
+
+
+def draw_press_ring(d, cx, cy, a, arm, t):
+    """Hold feedback around the key: a ring that shrinks while the gesture
+    arms, then breathes once press-to-talk has engaged.
+
+    Drawn outside the key on purpose — a touch dot on top of it would hide
+    the very mic glyph this demo is about.
+    """
+    if arm < 1.0:
+        r = int(25 - 8 * arm)
+        color, op = WHITE, 0.4
+    else:
+        r = 18 + int(1.5 + 1.5 * math.sin(t / 1.6))
+        color, op = GREEN, 0.45
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=alpha(color, a * op), width=2)
+
+
 def frame(t):
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -131,24 +224,26 @@ def frame(t):
     if edge <= 0:
         return img
 
-    # --- user bubble (fade in over 12 frames) ---
-    ua = min(1.0, t / 12.0) * edge
+    holding = T_OVERLAY <= t < T_RELEASE
+    pending = T_RELEASE <= t < T_LAND
+    submitted = t >= T_LAND
+
+    # --- user bubble (appears when the transcript lands and is submitted) ---
+    ua = min(1.0, (t - T_LAND) / 8.0) * edge if submitted else 0.0
     if ua > 0:
         tw = d.textlength(USER_TEXT, font=f_text)
         rrect(d, [W - 60 - tw - 24, 58, W - 40, 92], 12, alpha(BUBBLE_USER, ua))
         d.text((W - 48 - tw - 12, 66), USER_TEXT, font=f_text, fill=alpha(TEXT, ua))
 
     # --- streamed assistant reply ---
-    seg1_start, seg1_speed = 12, 1.0
-    seg1_k = max(0, min(len(SEG1), int((t - seg1_start) * seg1_speed))) if t >= seg1_start else 0
-    code_start, code_per = 40, 6
+    seg1_k = max(0, min(len(SEG1), int(t - T_REPLY))) if t >= T_REPLY else 0
     code_lines_vis = []
     for i, line in enumerate(CODE):
-        s0 = code_start + i * code_per
+        s0 = T_CODE + i * CODE_PER
         if t < s0:
             code_lines_vis.append(None)
         else:
-            k = min(len(line), int((t - s0) / code_per * len(line)) + 1)
+            k = min(len(line), int((t - s0) / CODE_PER * len(line)) + 1)
             code_lines_vis.append((line, k))
 
     # barge-in: freeze the reply mid-stream
@@ -158,65 +253,132 @@ def frame(t):
             if item is None:
                 continue
             text, _ = item
-            s0 = code_start + i * code_per
+            s0 = T_CODE + i * CODE_PER
             if s0 >= BARGE:
                 code_lines_vis[i] = None
             else:
-                kk = min(len(text), int((BARGE - 1 - s0) / code_per * len(text)) + 1)
+                kk = min(len(text), int((BARGE - 1 - s0) / CODE_PER * len(text)) + 1)
                 code_lines_vis[i] = (text, kk)
 
-    aia = (1.0 if t >= 10 else 0.0) * edge
+    aia = (1.0 if t >= T_REPLY else 0.0) * edge
     if aia > 0:
-        rrect(d, [20, 108, 560, 330], 12, alpha(BUBBLE_AI, aia))
+        # the bubble grows with the stream instead of reserving the final box
+        rows_vis = sum(1 for c in code_lines_vis if c is not None)
+        code_bot = 160 + rows_vis * 21 + 6
+        rrect(d, [20, 108, 560, (code_bot + 12) if rows_vis else 148], 12,
+              alpha(BUBBLE_AI, aia))
         if seg1_k > 0:
             d.text((40, 122), SEG1[:seg1_k], font=f_text, fill=alpha(TEXT, aia))
-        vis = [c for c in code_lines_vis if c is not None]
-        if vis:
-            rrect(d, [40, 152, 540, 318], 8, alpha(CODE_BG, aia))
+        if rows_vis:
+            rrect(d, [40, 152, 540, code_bot], 8, alpha(CODE_BG, aia))
             draw_code(d, 52, 160, code_lines_vis)
 
     # --- composer ---
-    comp_a = edge
-    if comp_a > 0:
-        rrect(d, [60, 480, 740, 518], 18, alpha(PANEL, comp_a))
-        d.text((78, 492), "想问点什么…", font=f_text, fill=alpha(SUB, comp_a))
+    rrect(d, [60, 480, 740, 518], 18, alpha(PANEL, edge))
+    d.text((78, 492), "想问点什么…", font=f_text, fill=alpha(SUB, edge))
 
-    # --- mic button (new UI: label + per-state indicator) ---
-    mic_speaking = t >= BARGE
-    if comp_a > 0:
-        rrect(d, [748, 480, 780, 514], 8, alpha(PANEL, comp_a))
-        if mic_speaking:
-            eq_bars(d, 752, 492, 4, 12, t, alpha(GREEN, comp_a), phase=1.0)
-            d.text((766, 493), "说", font=f_badge, fill=alpha(GREEN, comp_a))
+    # --- send key: arrow normally, covered by a mic glyph while held ---
+    sx = (SEND_BOX[0] + SEND_BOX[2]) / 2
+    sy = (SEND_BOX[1] + SEND_BOX[3]) / 2
+    if holding or pending:
+        # the official arrow icon belongs to the InputBar, so the plugin
+        # covers the key with its own circle instead of swapping the glyph
+        rrect(d, SEND_BOX, 14, alpha(SEND, edge))
+        if pending:
+            draw_spinner(d, sx, sy, 7, t, on(WHITE, SEND, edge))
         else:
-            d.ellipse([753, 491, 763, 501], fill=alpha(SUB, comp_a))
-            d.text((766, 491), "mic", font=f_badge, fill=alpha(SUB, comp_a))
+            draw_mic_glyph(d, sx, sy, 26, on(WHITE, SEND, edge))
+    else:
+        rrect(d, SEND_BOX, 14, alpha(lerp(PANEL, SEND, 0.55), edge))
+        d.line([sx, sy + 6, sx, sy - 6], fill=alpha(WHITE, edge * 0.85), width=2)
+        d.line([sx - 5, sy - 1, sx, sy - 6], fill=alpha(WHITE, edge * 0.85), width=2)
+        d.line([sx + 5, sy - 1, sx, sy - 6], fill=alpha(WHITE, edge * 0.85), width=2)
 
-    # --- voice capsule (new UI: frosted pill with equalizer when playing) ---
-    cap_a = (1.0 if t >= 18 else 0.0) * edge
+    # --- mic button (plugin slot: label + per-state indicator) ---
+    rrect(d, [736, 480, 780, 514], 8, alpha(PANEL, edge))
+    if t >= BARGE:
+        eq_bars(d, 741, 492, 4, 12, t, alpha(GREEN, edge), phase=1.0)
+        d.text((757, 493), "说", font=f_badge, fill=alpha(GREEN, edge))
+    elif holding:
+        d.ellipse([742, 491, 752, 501], fill=alpha(GREEN, edge))
+        d.text((756, 491), "松开", font=f_badge, fill=alpha(GREEN, edge))
+    elif pending:
+        draw_spinner(d, 747, 496, 5, t, alpha(BLUE, edge))
+        d.text((756, 491), "识别", font=f_badge, fill=alpha(BLUE, edge))
+    else:
+        d.ellipse([742, 491, 752, 501], fill=alpha(SUB, edge))
+        d.text((756, 491), "mic", font=f_badge, fill=alpha(SUB, edge))
+
+    # --- press-to-talk overlay: waveform + live caption + hint ---
+    if holding or pending:
+        pop = min(1.0, (t - T_OVERLAY) / 4.0)
+        oa = edge * pop
+        card = [232, 352, 568, 462]
+        rrect(d, card, 18, alpha(CARD, oa),
+              outline=alpha(GREEN if holding else BLUE, oa * 0.55), width=1)
+        draw_wave(d, 400, 386, t, GREEN, CARD, oa, frozen=pending)
+
+        live = ""
+        if t >= T_P2:
+            live = PARTIAL_2
+        elif t >= T_P1:
+            live = PARTIAL_1
+        if live:
+            lw = d.textlength(live, font=f_live)
+            # dimmed once released: the preview is not what will be sent
+            col = on(SUB if pending else TEXT, CARD, oa)
+            d.text((400 - lw / 2, 408), live, font=f_live, fill=col)
+            if holding and t % 12 < 7:
+                d.rectangle([400 + lw / 2 + 3, 410, 400 + lw / 2 + 5, 424],
+                            fill=on(GREEN, CARD, oa))
+
+        if pending:
+            draw_spinner(d, 372, 442, 6, t, on(BLUE, CARD, oa))
+            d.text((384, 435), "识别中…", font=f_cap, fill=on(SUB, CARD, oa))
+        else:
+            hint = "松开发送 · 上滑取消"
+            hw = d.textlength(hint, font=f_cap)
+            d.text((400 - hw / 2, 435), hint, font=f_cap, fill=on(SUB, CARD, oa))
+
+    # --- keyboard route: the same gesture without leaving the keyboard ---
+    if t < T_LAND:
+        ka = edge * (1.0 if t >= T_PRESS else 0.0)
+        if ka > 0:
+            pill = [286, 306, 514, 336]
+            rrect(d, pill, 15, alpha(PANEL, ka * 0.9),
+                  outline=alpha((70, 76, 86), ka), width=1)
+            d.text((302, 313), "或长按", font=f_cap, fill=alpha(SUB, ka))
+            rrect(d, [348, 311, 384, 331], 5, alpha((44, 50, 60), ka),
+                  outline=alpha((90, 97, 108), ka), width=1)
+            d.text((355, 314), "Ctrl", font=f_badge, fill=alpha(TEXT, ka))
+            d.text((392, 313), "说话 · Esc 取消", font=f_cap, fill=alpha(SUB, ka))
+
+    # --- touch point on the send key while pressing ---
+    if T_PRESS <= t < T_RELEASE:
+        draw_press_ring(d, sx, sy, edge,
+                        min(1.0, (t - T_PRESS) / (T_OVERLAY - T_PRESS)), t)
+
+    # --- voice capsule: TTS playback with captions, then listening ---
+    cap_a = (1.0 if t >= T_CAP else 0.0) * edge
     if cap_a > 0:
         playing = t < BARGE
         cap_box = [560, 434, 780, 466]
         rrect(d, cap_box, 16, alpha((28, 30, 34), cap_a * 0.92))
-        # 1px frosted border
         rrect(d, cap_box, 16, fill=None, outline=alpha((90, 96, 105), cap_a), width=1)
         if playing:
-            # equalizer bars + live caption
             eq_bars(d, 574, 444, 4, 14, t, alpha(GREEN, cap_a))
-            k = min(seg1_k, len(CAPTION))
+            k = min(max(0, seg1_k), len(CAPTION))
             d.text((598, 441), (CAPTION[:k] or "voice ready")[:30],
                    font=f_cap, fill=alpha(TEXT, cap_a))
         else:
-            # pulsing red dot while listening (ring expands with sin)
             pulse = int(2.5 + 2.5 * math.sin(t / 1.4))
             d.ellipse([572 - pulse, 443 - pulse, 586 + pulse, 457 + pulse],
                       outline=alpha(RED, cap_a * (0.35 * (1 - pulse / 5.0))), width=1)
             d.ellipse([574, 445, 584, 455], fill=alpha(RED, cap_a))
             d.text((596, 441), "voice: listening…", font=f_cap, fill=alpha(TEXT, cap_a))
-            # skip button is gone after barge-in (playback already stopped)
 
     # --- barge-in callout ---
-    big_a = (min(1.0, (t - 64) / 8.0) if t >= 64 else 0.0) * edge
+    big_a = (min(1.0, (t - T_BIG) / 8.0) if t >= T_BIG else 0.0) * edge
     if big_a > 0:
         label = "true barge-in"
         tw2 = d.textlength(label, font=f_big)
@@ -233,15 +395,16 @@ def main():
     frames = [frame(t) for t in range(TOTAL)]
     first = frames[0].convert("P", palette=Image.ADAPTIVE, colors=256)
     pf = [f.quantize(palette=first) for f in frames]
+    out = os.path.join(out_dir, "docs", "demo.gif")
     pf[0].save(
-        os.path.join(out_dir, "docs", "demo.gif"),
+        out,
         save_all=True,
         append_images=pf[1:],
         duration=DUR,
         loop=0,
-        optimize=False,
+        optimize=True,
     )
-    size = os.path.getsize(os.path.join(out_dir, "docs", "demo.gif"))
+    size = os.path.getsize(out)
     print(f"demo.gif written: {size // 1024} KB, {len(pf)} frames @ {1000 // DUR} fps")
 
 
